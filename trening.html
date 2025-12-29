@@ -1,132 +1,186 @@
 <!DOCTYPE html>
-<html lang="bs">
+<html lang="sr">
 <head>
     <meta charset="UTF-8">
-    <title>AI Trening - Slovo po slovo</title>
+    <title>Паметни AI Тренинг - Слово по слово</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/speech-commands@latest/dist/speech-commands.min.js"></script>
     <style>
-        :root { --primary: #3498db; --success: #2ecc71; --bg: #0f172a; }
+        :root { --primary: #3498db; --success: #2ecc71; --error: #e74c3c; --bg: #0f172a; }
         body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: white; text-align: center; margin: 0; padding: 20px; }
-        .card { background: #1e293b; max-width: 600px; margin: 40px auto; padding: 40px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); border: 1px solid #334155; }
-        #big-letter { font-size: 10rem; font-weight: bold; color: var(--primary); display: block; height: 160px; line-height: 160px; margin-bottom: 20px; }
-        .timer-dot { width: 20px; height: 20px; background: #334155; border-radius: 50%; display: inline-block; margin: 5px; transition: 0.2s; }
-        .active-dot { background: var(--success); transform: scale(1.3); }
-        .btn-start { padding: 20px 40px; font-size: 1.5rem; background: var(--success); color: white; border: none; border-radius: 50px; cursor: pointer; font-weight: bold; }
-        .progress-container { width: 100%; background: #334155; height: 8px; border-radius: 4px; margin-top: 30px; }
-        #progress-bar { width: 0%; height: 100%; background: var(--primary); transition: 0.3s; }
-        #status { margin-top: 15px; color: #94a3b8; font-size: 0.9rem; }
+        .card { background: #1e293b; max-width: 650px; margin: 20px auto; padding: 40px; border-radius: 25px; box-shadow: 0 15px 35px rgba(0,0,0,0.5); border: 1px solid #334155; }
+        
+        #big-letter { font-size: 10rem; font-weight: bold; color: var(--primary); display: block; height: 160px; line-height: 160px; }
+        
+        .meter-container { width: 100%; height: 25px; background: #334155; border-radius: 15px; margin: 20px 0; overflow: hidden; position: relative; }
+        #confidence-bar { width: 0%; height: 100%; background: var(--success); transition: width 0.5s ease-out; }
+        #confidence-text { position: absolute; width: 100%; top: 0; left: 0; line-height: 25px; font-weight: bold; font-size: 0.9rem; }
+
+        .dots-row { margin: 20px 0; }
+        .dot { width: 15px; height: 15px; background: #334155; border-radius: 50%; display: inline-block; margin: 0 8px; transition: 0.2s; }
+        .dot.active { background: var(--primary); transform: scale(1.4); box-shadow: 0 0 10px var(--primary); }
+        .dot.record { background: var(--error); }
+
+        .btn-start { padding: 18px 45px; font-size: 1.4rem; background: var(--success); color: white; border: none; border-radius: 50px; cursor: pointer; font-weight: bold; transition: 0.3s; }
+        .btn-start:hover { transform: translateY(-3px); box-shadow: 0 5px 15px rgba(46, 204, 113, 0.4); }
+        
+        #instruction { font-size: 1.2rem; color: #94a3b8; margin-bottom: 20px; min-height: 1.5em; }
+        .status-badge { display: inline-block; padding: 5px 15px; border-radius: 15px; font-size: 0.8rem; background: #334155; margin-bottom: 10px; }
     </style>
 </head>
 <body>
 
 <div class="card">
-    <div id="setup">
-        <h1>Ritmički Trening 🎧</h1>
-        <p>Prati zvuk "bipa". Na četvrti (viši) zvuk izgovori slovo jasno i kratko.</p>
-        <button class="btn-start" onclick="startTrainingFlow()">ZAPOČNI TRENING</button>
+    <div id="setup-screen">
+        <h1>Интелигентни Тренинг 🧠</h1>
+        <p>Систем ће тражити од вас да понављате слово док не постигнемо <b>85% сигурности</b>.</p>
+        <button class="btn-start" onclick="startSmartFlow()">ЗАПОЧНИ ТРЕНИНГ</button>
     </div>
 
-    <div id="training" style="display:none;">
-        <span id="big-letter">?</span>
-        <div id="dots">
-            <div class="timer-dot"></div>
-            <div class="timer-dot"></div>
-            <div class="timer-dot"></div>
-            <div class="timer-dot"></div>
+    <div id="training-screen" style="display:none;">
+        <div class="status-badge" id="letter-counter">Слово: 1/30</div>
+        <span id="big-letter">А</span>
+        <div id="instruction">Припрема...</div>
+
+        <div class="dots-row">
+            <div class="dot"></div>
+            <div class="dot"></div>
+            <div class="dot"></div>
+            <div class="dot" id="record-dot"></div>
         </div>
-        <div id="status">Priprema...</div>
-        <div class="progress-container"><div id="progress-bar"></div></div>
+
+        <div class="meter-container">
+            <div id="confidence-bar"></div>
+            <div id="confidence-text">Сигурност: 0%</div>
+        </div>
+        <p style="font-size: 0.8rem; color: #64748b;">Циљ: 85% сигурности за прелазак на следеће слово</p>
     </div>
 </div>
 
 <script>
-    const azbuka = "АБВГДЂЕŽЗИЈКЛЉМНЊОПРСТЋУФХЦЧЏŠ".split(""); // Miks zbog lakšeg prepoznavanja
+    const azbuka = "АБВГДЂЕЖЗИЈКЛЉМНЊОПРСТЋУФХЦЧЏШ".split("");
     let transferRecognizer;
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    let audioCtx;
+    const TARGET_CONFIDENCE = 0.85;
 
-    // Funkcija za generisanje Bipa
+    // Funkcija za zvučni signal
     function playBeep(freq, duration) {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         const osc = audioCtx.createOscillator();
         const gain = audioCtx.createGain();
         osc.connect(gain);
         gain.connect(audioCtx.destination);
         osc.frequency.value = freq;
-        osc.type = "sine";
         gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
         gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration/1000);
         osc.start();
         osc.stop(audioCtx.currentTime + duration/1000);
     }
 
-    async function init() {
+    async function initAI() {
         const base = speechCommands.create('BROWSER_FFT');
         await base.ensureModelLoaded();
-        transferRecognizer = base.createTransfer('brzi-model');
+        transferRecognizer = base.createTransfer('smart-azbuka');
     }
 
-    async function startTrainingFlow() {
-        document.getElementById('setup').style.display = 'none';
-        document.getElementById('training').style.display = 'block';
+    async function startSmartFlow() {
+        document.getElementById('setup-screen').style.display = 'none';
+        document.getElementById('training-screen').style.display = 'block';
         
-        // 1. Snimanje tišine
+        // 1. Snimanje tišine (obavezno za bazu)
         await recordNoise();
 
-        // 2. Snimanje azbuke
+        // 2. Prolaz kroz azbuku sa validacijom
         for (let i = 0; i < azbuka.length; i++) {
-            await trainLetter(azbuka[i]);
-            document.getElementById('progress-bar').style.width = ((i+1)/azbuka.length*100) + "%";
+            document.getElementById('letter-counter').innerText = `Слово: ${i+1}/${azbuka.length}`;
+            await trainLetterWithValidation(azbuka[i]);
         }
 
-        finish();
+        finishTraining();
     }
 
     async function recordNoise() {
         document.getElementById('big-letter').innerText = "🤫";
-        document.getElementById('status').innerText = "Budi tiho - snimam pozadinu...";
-        for(let i=0; i<6; i++) {
+        document.getElementById('instruction').innerText = "Будите тихи... снимам буку";
+        for(let i=0; i<8; i++) {
             await transferRecognizer.collectExample('_background_noise_');
-            await new Promise(r => setTimeout(r, 400));
+            await new Promise(r => setTimeout(r, 300));
         }
     }
 
-    async function trainLetter(slovo) {
+    async function trainLetterWithValidation(slovo) {
         document.getElementById('big-letter').innerText = slovo;
-        const dots = document.querySelectorAll('.timer-dot');
-        
-        // Snimamo 4 uzorka po slovu u ritmu
-        for (let sample = 0; sample < 4; sample++) {
-            // Ritam: bip, bip, bip, BEEP (izgovori)
+        let currentConfidence = 0;
+        let samplesCollected = 0;
+
+        while (currentConfidence < TARGET_CONFIDENCE || samplesCollected < 3) {
+            // Ritam bipa
+            const dots = document.querySelectorAll('.dot');
             for (let b = 0; b < 3; b++) {
-                dots[b].classList.add('active-dot');
-                playBeep(440, 100); // Niži ton
+                dots[b].classList.add('active');
+                playBeep(440, 100);
+                document.getElementById('instruction').innerText = "Припрема...";
                 await new Promise(r => setTimeout(r, 500));
-                dots[b].classList.remove('active-dot');
+                dots[b].classList.remove('active');
             }
-            
-            // Finalni ton za snimanje
-            dots[3].classList.add('active-dot');
-            playBeep(880, 150); // Viši ton
-            document.getElementById('status').innerText = "SAD!";
-            
-            // Snimanje slova
+
+            // Snimanje
+            dots[3].classList.add('record');
+            playBeep(880, 150);
+            document.getElementById('instruction').innerText = "ИЗГОВОРИ САД!";
             await transferRecognizer.collectExample(slovo);
+            samplesCollected++;
             
-            await new Promise(r => setTimeout(r, 400));
-            dots[3].classList.remove('active-dot');
-            document.getElementById('status').innerText = "Odlično...";
+            dots[3].classList.remove('record');
+            document.getElementById('instruction').innerText = "Анализирам...";
+
+            // Kratki trening "u letu" da dobijemo procenat (brzinski 10 epoha)
+            await transferRecognizer.train({ epochs: 10, showProgress: false });
+            
+            // Provera trenutne sigurnosti
+            const result = await transferRecognizer.recognize();
+            const idx = result.scores.indexOf(Math.max(...result.scores));
+            const recognizedLabel = transferRecognizer.wordLabels()[idx];
+            
+            if (recognizedLabel === slovo) {
+                currentConfidence = result.scores[idx];
+            } else {
+                currentConfidence = 0; // Promašio je slovo
+            }
+
+            // Update UI
+            updateMeter(currentConfidence);
+            
+            if (currentConfidence < TARGET_CONFIDENCE) {
+                document.getElementById('instruction').innerText = "Ниска сигурност. Покушајмо поново...";
+                await new Promise(r => setTimeout(r, 1000));
+            } else {
+                document.getElementById('instruction').innerText = "Одлично! Прелазимо даље.";
+                await new Promise(r => setTimeout(r, 800));
+            }
         }
     }
 
-    async function finish() {
-        document.getElementById('status').innerText = "Treniram neuronsku mrežu...";
-        await transferRecognizer.train({ epochs: 50 });
-        await transferRecognizer.save('indexeddb://moj-model-slova');
-        document.getElementById('big-letter').innerText = "✅";
-        document.getElementById('status').innerHTML = "<a href='index.html' style='color:white; font-size:1.5rem;'>KRENI NA IGRU</a>";
+    function updateMeter(val) {
+        const percent = Math.round(val * 100);
+        const bar = document.getElementById('confidence-bar');
+        bar.style.width = percent + "%";
+        document.getElementById('confidence-text').innerText = `Сигурност: ${percent}%`;
+        
+        if (percent >= 85) bar.style.background = "#2ecc71";
+        else if (percent >= 50) bar.style.background = "#f1c40f";
+        else bar.style.background = "#e74c3c";
     }
 
-    init();
+    async function finishTraining() {
+        document.getElementById('instruction').innerText = "Финално подешавање мреже...";
+        await transferRecognizer.train({ epochs: 30 });
+        await transferRecognizer.save('indexeddb://pametni-model-azbuka');
+        document.getElementById('big-letter').innerText = "✅";
+        document.getElementById('instruction').innerHTML = "<a href='index.html' style='color:white; font-size:1.5rem; text-decoration:none;'>🚀 КРЕНИ НА ИГРУ</a>";
+    }
+
+    initAI();
 </script>
 </body>
 </html>
