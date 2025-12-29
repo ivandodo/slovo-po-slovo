@@ -1,91 +1,69 @@
 <!DOCTYPE html>
-<html lang="sr">
+<html lang="bs">
 <head>
     <meta charset="UTF-8">
-    <title>Игра - Слово по слово</title>
+    <title>Igra - Slovo po slovo</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/speech-commands@latest/dist/speech-commands.min.js"></script>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; background: #2c3e50; color: white; text-align: center; padding: 50px; }
-        .game-container { background: rgba(255,255,255,0.1); padding: 40px; border-radius: 20px; max-width: 600px; margin: auto; }
-        #word-display { font-size: 4rem; letter-spacing: 15px; margin: 30px 0; font-family: monospace; }
-        .hidden { display: none; }
-        .btn { padding: 15px 30px; border: none; border-radius: 30px; cursor: pointer; font-size: 1.2rem; font-weight: bold; background: #27ae60; color: white; }
+        body { font-family: sans-serif; background: #0f172a; color: white; text-align: center; padding: 50px; }
+        #word { font-size: 5rem; letter-spacing: 20px; margin: 40px 0; font-family: monospace; }
+        .btn { padding: 20px 40px; background: #27ae60; color: white; border: none; border-radius: 50px; cursor: pointer; font-size: 1.2rem; }
+        #status { font-size: 1.5rem; color: #3498db; height: 30px; }
     </style>
 </head>
 <body>
 
-<div id="setup-screen" class="game-container">
-    <h1>Добродошли у "Слово по слово"</h1>
-    <p>Да бисте почели, морате учитати ваш истренирани модел.</p>
-    <button class="btn" onclick="loadAndStart()">🔄 УЧИТАЈ МОДЕЛ И ПОЧНИ</button>
-    <br><br>
-    <a href="trening.html" style="color: #ecf0f1;">Немаш модел? Иди на тренинг</a>
-</div>
-
-<div id="game-screen" class="game-container hidden">
-    <h2 id="status">Слушам... изговори слово</h2>
-    <div id="word-display">_ _ _ _ _</div>
-    <div id="alphabet-status" style="font-size: 0.8rem; color: #bdc3c7;"></div>
-</div>
+    <h1>POGODI RIJEČ</h1>
+    <div id="status">Učitaj model da počneš</div>
+    <div id="word">_ _ _ _ _</div>
+    <button class="btn" id="start-btn" onclick="start()">POKRENI IGRU</button>
 
 <script>
-    const azbuka = "АБВГДЂЕЖЗИЈКЛЉМНЊОПРСТЋУФХЦЧЏШ";
-    const pojmovi = ["ПРОГРАМИРАЊЕ", "БЕОГРАД", "ТЕНСОРФЛОУ", "СЛАГАЛИЦА"];
+    const pojmovi = ["SRCE", "VODA", "TRAVA", "SUNCE", "ŠUMA"];
     let recognizer;
     let target = "";
     let guessed = [];
 
-    async function loadAndStart() {
+    async function start() {
+        document.getElementById('status').innerText = "Učitavam model...";
         try {
             const base = speechCommands.create('BROWSER_FFT');
             await base.ensureModelLoaded();
-            recognizer = base.createTransfer('igra-model');
+            recognizer = base.createTransfer('igra');
+            await recognizer.load('indexeddb://moj-model-slova');
             
-            // Učitavanje iz IndexedDB
-            await recognizer.load('indexeddb://slovo-po-slovo-model');
-            
-            document.getElementById('setup-screen').classList.add('hidden');
-            document.getElementById('game-screen').classList.remove('hidden');
-            
-            startGame();
+            document.getElementById('start-btn').style.display = 'none';
+            target = pojmovi[Math.floor(Math.random()*pojmovi.length)];
+            render();
+            listen();
         } catch (e) {
-            alert("Нисам нашао сачуван модел. Иди на страницу за тренинг.");
+            alert("Model nije pronađen! Prvo uradi trening.");
         }
-    }
-
-    function startGame() {
-        target = pojmovi[Math.floor(Math.random()*pojmovi.length)];
-        guessed = [];
-        render();
-        startListening();
     }
 
     function render() {
         let out = "";
-        for(let s of target) {
-            out += (guessed.includes(s) ? s : "_");
-        }
-        document.getElementById('word-display').innerText = out;
-        if(!out.includes("_")) {
-            document.getElementById('status').innerText = "ПОБЕДА!";
-            recognizer.stopListening();
-        }
+        for(let s of target) out += (guessed.includes(s) ? s : "_ ");
+        document.getElementById('word').innerText = out;
+        if(!out.includes("_")) document.getElementById('status').innerText = "POBJEDA!";
     }
 
-    async function startListening() {
-        await recognizer.listen(res => {
-            const scores = Array.from(res.scores);
-            const idx = scores.indexOf(Math.max(...scores));
+    async function listen() {
+        document.getElementById('status').innerText = "Slušam slova...";
+        recognizer.listen(result => {
+            const idx = result.scores.indexOf(Math.max(...result.scores));
             const slovo = recognizer.wordLabels()[idx];
-            
-            if(res.scores[idx] > 0.85 && azbuka.includes(slovo)) {
-                if(!guessed.includes(slovo)) {
+            const score = result.scores[idx];
+
+            if(score > 0.75 && slovo !== '_background_noise_') {
+                if(target.includes(slovo) && !guessed.includes(slovo)) {
                     guessed.push(slovo);
                     render();
-                    document.getElementById('status').innerText = `Чуо сам: ${slovo}`;
                 }
+                document.getElementById('status').innerText = `Čuo sam: ${slovo} (${(score*100).toFixed(0)}%)`;
             }
-        }, { probabilityThreshold: 0.75 });
+        }, { probabilityThreshold: 0.70 });
     }
 </script>
 </body>
