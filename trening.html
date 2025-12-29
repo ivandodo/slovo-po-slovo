@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="sr">
+<head>
+    <meta charset="UTF-8">
+    <title>Тренинг - Слово по слово</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/speech-commands@latest/dist/speech-commands.min.js"></script>
+    <style>
+        :root { --primary: #3498db; --success: #2ecc71; --bg: #f8f9fa; }
+        body { font-family: 'Segoe UI', sans-serif; background: var(--bg); text-align: center; padding: 20px; }
+        .card { background: white; max-width: 800px; margin: auto; padding: 30px; border-radius: 15px; box-shadow: 0 5px 20px rgba(0,0,0,0.1); }
+        .grid { display: grid; grid-template-columns: repeat(10, 1fr); gap: 10px; margin: 20px 0; }
+        .tile { padding: 10px; border: 1px solid #ddd; border-radius: 5px; cursor: pointer; font-weight: bold; }
+        .tile.active { background: var(--primary); color: white; }
+        .tile.done { border-color: var(--success); border-width: 2px; }
+        .btn { padding: 12px 25px; border: none; border-radius: 5px; cursor: pointer; color: white; font-weight: bold; margin: 5px; }
+        .btn-rec { background: var(--primary); width: 100%; font-size: 1.2rem; }
+        .btn-train { background: var(--success); }
+        .btn-save { background: #f39c12; }
+        #test-area { margin-top: 20px; padding: 15px; border: 2px dashed #3498db; border-radius: 10px; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h1>🎙️ Тренинг центар</h1>
+    <p>Изабери слово и држи дугме док изговараш. Сними барем 5-8 примера по слову.</p>
+    
+    <button class="btn btn-save" onclick="recordNoise()">1. Сними тишину (5x)</button>
+    <div class="grid" id="alphabet-grid"></div>
+    
+    <h2 id="current-label">Одабери слово изнад</h2>
+    <button id="rec-btn" class="btn btn-rec" disabled>ДРЖИ ЗА СНИМАЊЕ</button>
+    
+    <hr>
+    
+    <button class="btn btn-train" onclick="train()">2. Покрени тренинг</button>
+    
+    <div id="test-area">
+        <h3>3. Тест прецизности</h3>
+        <button class="btn btn-rec" style="width: auto;" onclick="toggleTesting()">Почни/Заустави тест</button>
+        <div id="test-result" style="font-size: 1.5rem; margin-top: 10px; font-weight: bold;">-</div>
+    </div>
+    
+    <div style="margin-top: 20px;">
+        <button class="btn btn-save" onclick="saveToBrowser()">💾 САЧУВАЈ МОДЕЛ ЗА ИГРУ</button>
+        <a href="index.html" style="display: block; margin-top: 10px;">Иди на почетну / Игру</a>
+    </div>
+</div>
+
+<script>
+    const azbuka = "АБВГДЂЕЖЗИЈКЛЉМНЊОПРСТЋУФХЦЧЏШ";
+    let recognizer;
+    let currentSlovo = null;
+    let isTesting = false;
+
+    async function init() {
+        const base = speechCommands.create('BROWSER_FFT');
+        await base.ensureModelLoaded();
+        recognizer = base.createTransfer('moj-ai');
+        
+        const grid = document.getElementById('alphabet-grid');
+        azbuka.split("").forEach(s => {
+            const div = document.createElement('div');
+            div.className = 'tile';
+            div.innerText = s;
+            div.onclick = () => {
+                document.querySelectorAll('.tile').forEach(t => t.classList.remove('active'));
+                div.classList.add('active');
+                currentSlovo = s;
+                document.getElementById('current-label').innerText = `Снимамо: ${s}`;
+                document.getElementById('rec-btn').disabled = false;
+            };
+            grid.appendChild(div);
+        });
+    }
+
+    async function recordNoise() {
+        for(let i=0; i<5; i++) await recognizer.collectExample('_background_noise_');
+        alert("Тишина снимљена!");
+    }
+
+    const recBtn = document.getElementById('rec-btn');
+    recBtn.onmousedown = async () => {
+        if(!currentSlovo) return;
+        await recognizer.collectExample(currentSlovo);
+        recBtn.style.background = "red";
+    };
+    recBtn.onmouseup = () => recBtn.style.background = "";
+
+    async function train() {
+        document.body.style.opacity = "0.5";
+        await recognizer.train({ epochs: 30 });
+        document.body.style.opacity = "1";
+        alert("Тренинг готов! Можеш тестирати.");
+    }
+
+    async function toggleTesting() {
+        if(isTesting) {
+            recognizer.stopListening();
+            document.getElementById('test-result').innerText = "-";
+        } else {
+            await recognizer.listen(res => {
+                const idx = res.scores.indexOf(Math.max(...res.scores));
+                document.getElementById('test-result').innerText = `${recognizer.wordLabels()[idx]} (${(res.scores[idx]*100).toFixed(0)}%)`;
+            }, { probabilityThreshold: 0.70 });
+        }
+        isTesting = !isTesting;
+    }
+
+    async function saveToBrowser() {
+        await recognizer.save('indexeddb://slovo-po-slovo-model');
+        alert("Модел је сачуван! Сада можеш ићи на почетну страну и почети игру.");
+    }
+
+    init();
+</script>
+</body>
+</html>
