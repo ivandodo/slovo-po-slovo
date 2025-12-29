@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="sr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Slovo po Slovo - TensorFlow.js</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/speech-commands@latest/dist/speech-commands.min.js"></script>
+
+    <style>
+        :root { --primary: #3498db; --success: #2ecc71; --bg: #f0f2f5; }
+        body { font-family: 'Segoe UI', sans-serif; background: var(--bg); padding: 20px; display: flex; justify-content: center; }
+        .container { background: white; padding: 30px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); max-width: 800px; width: 100%; text-align: center; }
+        h1, h2 { color: #2c3e50; }
+        .hidden { display: none !important; }
+        
+        /* Training UI */
+        .letter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(50px, 1fr)); gap: 10px; margin: 20px 0; }
+        .train-tile { padding: 10px; border: 2px solid #eee; cursor: pointer; border-radius: 5px; font-weight: bold; position: relative; }
+        .train-tile.active { border-color: var(--primary); background: #ebf5fb; }
+        .sample-count { position: absolute; top: -5px; right: -5px; background: var(--success); color: white; font-size: 0.7rem; padding: 2px 5px; border-radius: 10px; }
+        
+        #record-btn { width: 100%; padding: 20px; font-size: 1.2rem; margin: 20px 0; background: var(--primary); color: white; border: none; border-radius: 10px; cursor: pointer; }
+        #record-btn:active { background: #2980b9; transform: scale(0.98); }
+        #train-model-btn { background: var(--success); }
+        
+        /* Game UI */
+        #word-display { font-size: 3rem; letter-spacing: 10px; margin: 30px 0; font-family: monospace; }
+        .game-alphabet { display: grid; grid-template-columns: repeat(10, 1fr); gap: 5px; }
+        .game-tile { padding: 8px; border: 1px solid #ccc; background: #eee; }
+        .game-tile.correct { background: var(--success); color: white; }
+        .game-tile.used { opacity: 0.5; text-decoration: line-through; }
+        #listening-indicator { color: var(--primary); font-weight: bold; margin-bottom: 10px; animation: pulse 1s infinite; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+
+        #loading-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(255,255,255,0.9); display: flex; justify-content: center; align-items: center; z-index: 99; }
+    </style>
+</head>
+<body>
+
+<div id="loading-overlay"><h2>Учитавам AI модел, молим сачекајте...</h2></div>
+
+<div class="container">
+    <div id="training-panel">
+        <h1>Персонализација гласа</h1>
+        <p>Да би игра била прецизна, морамо је научити твом гласу. Кликни на слово, па држи дугме "СНИМАЈ" док га изговараш. Сними бар 5 примера за свако слово.</p>
+        
+        <div style="margin-bottom: 20px; padding: 10px; background: #ffeaa7; border-radius: 5px;">
+             <strong>Први корак:</strong> Сними мало тишине (позадинске буке) да модел зна шта НИЈЕ слово.
+             <button id="record-noise-btn" style="padding: 5px 10px; margin-left: 10px; cursor:pointer;">Сними тишину (5x)</button>
+        </div>
+
+        <div class="letter-grid" id="train-grid"></div>
+        
+        <h2 id="current-train-letter">Одабери слово изнад</h2>
+        <button id="record-btn" disabled>ДРЖИ ЗА СНИМАЊЕ 🎤</button>
+        
+        <div id="train-status">Сакупљено примера: 0</div>
+        <br>
+        <button id="train-model-btn" style="padding: 15px 30px; font-size: 1.1rem; border: none; border-radius: 30px; color: white; cursor: pointer; display: none;">🧠 ПОКРЕНИ ТРЕНИНГ МОДЕЛА</button>
+    </div>
+
+    <div id="game-panel" class="hidden">
+        <h1>Слово по слово</h1>
+        <div id="listening-indicator">🎤 Слушам... изговори слово</div>
+        <div id="word-display">_ _ _ _ _</div>
+        <div class="game-alphabet" id="game-grid"></div>
+        <p id="game-status">Игра је почела!</p>
+        <button onclick="resetGame()" style="margin-top: 20px; padding: 10px 20px;">Нова реч</button>
+    </div>
+</div>
+
+<script>
+    const azbuka = "АБВГДЂЕЖЗИЈКЛЉМНЊОПРСТЋУФХЦЧЏШ";
+    const pojmovi = ["ВЕШТАЧКА ИНТЕЛИГЕНЦИЈА", "ТЕНСОРФЛОУ", "ПРОГРАМИРАЊЕ", "БЕОГРАД", "НИКОЛА ТЕСЛА"];
+    let transferRecognizer;
+    let currentLetter = null;
+    let isRecording = false;
+    let totalSamples = 0;
+
+    // Game State
+    let targetWord = "";
+    let guessedLetters = [];
+    let usedLetters = [];
+    let isListeningForGame = false;
+
+    // === INICIJALIZACIJA TENSORFLOW.JS ===
+    async function loadModel() {
+        // Učitavamo osnovni model za prepoznavanje zvuka
+        const baseRecognizer = speechCommands.create('BROWSER_FFT');
+        await baseRecognizer.ensureModelLoaded();
+        // Kreiramo "transfer" model koji ćemo mi trenirati
+        transferRecognizer = baseRecognizer.createTransfer('azbuka-model');
+        document.getElementById('loading-overlay').classList.add('hidden');
+        initTrainGrid();
+    }
+
+    // === UI ZA TRENING ===
+    function initTrainGrid() {
+        const grid = document.getElementById('train-grid');
+        azbuka.split("").forEach(s => {
+            const div = document.createElement('div');
+            div.className = 'train-tile';
+            div.innerText = s;
+            div.id = `train-${s}`;
+            div.onclick = () => selectLetter(s);
+            div.innerHTML += `<span class="sample-count" id="count-${s}">0</span>`;
+            grid.appendChild(div);
+        });
+    }
+
+    function selectLetter(s) {
+        currentLetter = s;
+        document.querySelectorAll('.train-tile').forEach(t => t.classList.remove('active'));
+        document.getElementById(`train-${s}`).classList.add('active');
+        document.getElementById('current-train-letter').innerText = `Снимамо слово: ${s}`;
+        document.getElementById('record-btn').disabled = false;
+    }
+
+    // === SNIMANJE GLASA (DATA COLLECTION) ===
+    const recordBtn = document.getElementById('record-btn');
+    recordBtn.addEventListener('mousedown', startRecording);
+    recordBtn.addEventListener('mouseup', stopRecording);
+    recordBtn.addEventListener('touchstart', startRecording); // Za mobilne
+    recordBtn.addEventListener('touchend', stopRecording);
+
+    async function startRecording() {
+        if (!currentLetter || isRecording) return;
+        isRecording = true;
+        recordBtn.innerText = "СНИМАМ... (Говори сад!)";
+        recordBtn.style.background = "#e74c3c";
+        // TF.js funkcija koja snima spektrogram zvuka
+        await transferRecognizer.collectExample(currentLetter);
+    }
+
+    function stopRecording() {
+        if (!isRecording) return;
+        isRecording = false;
+        recordBtn.innerText = "ДРЖИ ЗА СНИМАЊЕ 🎤";
+        recordBtn.style.background = "";
+        
+        // Ažuriraj brojače
+        totalSamples++;
+        const countSpan = document.getElementById(`count-${currentLetter}`);
+        countSpan.innerText = parseInt(countSpan.innerText) + 1;
+        document.getElementById('train-status').innerText = `Укупно примера: ${totalSamples}`;
+        
+        if (totalSamples > 10) {
+            document.getElementById('train-model-btn').style.display = "inline-block";
+        }
+    }
+    
+    // Snimanje pozadinske buke
+    document.getElementById('record-noise-btn').onclick = async function() {
+        this.disabled = true;
+        this.innerText = "Снимам тишину... шшш...";
+        // Oznaka '_background_noise_' je specijalna za TF.js
+        for(let i=0; i<5; i++) {
+             await transferRecognizer.collectExample('_background_noise_');
+        }
+        this.innerText = "Тишина снимљена! ✅";
+        totalSamples += 5;
+    };
+
+
+    // === TRENING MODELA (THE MAGIC HAPPENS HERE) ===
+    document.getElementById('train-model-btn').onclick = async () => {
+        if (totalSamples < 30) { // Neki minimum
+            alert("Молим вас снимите још примера пре тренинга.");
+            return;
+        }
+        
+        document.getElementById('loading-overlay').classList.remove('hidden');
+        document.getElementById('loading-overlay').innerHTML = "<h2>Тренирам твој лични модел... Ово може потрајати.</h2>";
+
+        // Pokrećemo trening u browseru!
+        await transferRecognizer.train({
+            epochs: 25, // Koliko puta prolazi kroz podatke
+            callback: {
+                onEpochEnd: async (epoch, logs) => {
+                    console.log(`Epoch ${epoch}: loss=${logs.loss}, accuracy=${logs.acc}`);
+                }
+            }
+        });
+
+        document.getElementById('loading-overlay').classList.add('hidden');
+        // Prelazak na igru
+        document.getElementById('training-panel').classList.add('hidden');
+        document.getElementById('game-panel').classList.remove('hidden');
+        initGame();
+    };
+
+
+    // === LOGIKA IGRE ===
+    function initGame() {
+        targetWord = pojmovi[Math.floor(Math.random() * pojmovi.length)];
+        guessedLetters = [];
+        usedLetters = [];
+        
+        // Crtanje vizuelne azbuke za igru
+        const gameGrid = document.getElementById('game-grid');
+        gameGrid.innerHTML = "";
+        azbuka.split("").forEach(s => {
+            gameGrid.innerHTML += `<div class="game-tile" id="game-${s}">${s}</div>`;
+        });
+        
+        renderWord();
+        startGameListening();
+    }
+
+    function renderWord() {
+        let display = "";
+        for (let s of targetWord) {
+            if (s === " ") display += "  ";
+            else if (guessedLetters.includes(s)) display += s;
+            else display += "_ ";
+        }
+        document.getElementById('word-display').innerText = display;
+        if (!display.includes("_")) {
+            document.getElementById('game-status').innerText = "ПОБЕДА!";
+            stopGameListening();
+        }
+    }
+
+    function resetGame() {
+        stopGameListening();
+        initGame();
+    }
+
+    // === SLUŠANJE UŽIVO (PREDICTION) ===
+    async function startGameListening() {
+        if(isListeningForGame) return;
+        isListeningForGame = true;
+        document.getElementById('listening-indicator').style.visibility = 'visible';
+
+        // Model sluša i daje predikcije u realnom vremenu
+        await transferRecognizer.listen(result => {
+            const labels = transferRecognizer.wordLabels();
+            // Nalazimo indeks sa najvećom verovatnoćom
+            const topIndex = result.scores.indexOf(Math.max(...result.scores));
+            const predictedLabel = labels[topIndex];
+            const confidence = result.scores[topIndex];
+
+            console.log(`Čuo: ${predictedLabel} (${(confidence*100).toFixed(1)}%)`);
+
+            // Ako je sigurnost veća od 85% i nije pozadinska buka
+            if (confidence > 0.85 && predictedLabel !== '_background_noise_' && azbuka.includes(predictedLabel)) {
+                processGameInput(predictedLabel);
+            }
+        }, {
+            probabilityThreshold: 0.75, // Ne reaguj ako nisi bar 75% siguran
+            overlapFactor: 0.50 // Koliko često uzorkuje zvuk
+        });
+    }
+    
+    function stopGameListening() {
+         if(transferRecognizer && isListeningForGame) {
+             transferRecognizer.stopListening();
+             isListeningForGame = false;
+             document.getElementById('listening-indicator').style.visibility = 'hidden';
+         }
+    }
+
+    function processGameInput(slovo) {
+        if (usedLetters.includes(slovo)) return;
+        usedLetters.push(slovo);
+        
+        const tile = document.getElementById(`game-${slovo}`);
+        if (targetWord.includes(slovo)) {
+            guessedLetters.push(slovo);
+            tile.classList.add('correct');
+            document.getElementById('game-status').innerText = `Тачно! Слово ${slovo}.`;
+        } else {
+            tile.classList.add('used');
+            document.getElementById('game-status').innerText = `Нема слова ${slovo}.`;
+        }
+        renderWord();
+    }
+
+    // Pokreni sve pri učitavanju
+    loadModel();
+
+</script>
+</body>
+</html>
